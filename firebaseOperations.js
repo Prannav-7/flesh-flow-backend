@@ -85,11 +85,28 @@ export async function addDocument(collectionName, data) {
  */
 export async function updateDocument(collectionName, documentId, data) {
     try {
+        console.log(`Updating document in ${collectionName} with ID: ${documentId}`);
+        console.log('Update data:', JSON.stringify(data, null, 2));
+
         const docRef = doc(db, collectionName, documentId);
+
+        // First, check if document exists
+        const docSnap = await getDoc(docRef);
+        if (!docSnap.exists()) {
+            console.error(`Document ${documentId} not found in ${collectionName}`);
+            return { success: false, error: 'Document not found' };
+        }
+
+        console.log('Current document data:', JSON.stringify(docSnap.data(), null, 2));
+
         await updateDoc(docRef, {
             ...data,
             updatedAt: new Date().toISOString()
         });
+
+        // Verify the update
+        const updatedDocSnap = await getDoc(docRef);
+        console.log('Updated document data:', JSON.stringify(updatedDocSnap.data(), null, 2));
 
         return { success: true, message: 'Document updated successfully' };
     } catch (error) {

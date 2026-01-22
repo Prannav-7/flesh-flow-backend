@@ -10,10 +10,51 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increased limit for base64 images
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+import { updateDocument, deleteDocument } from './firebaseOperations.js';
+
+// ============================================
+// SPECIFIC ORDER ROUTES (must come before /api/data/:collection)
+// ============================================
+
+// Update order (including status)
+app.put('/api/orders/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updateData = req.body;
+
+        console.log('========== ORDER UPDATE REQUEST ==========');
+        console.log('Order ID:', id);
+        console.log('Update Data:', JSON.stringify(updateData, null, 2));
+
+        const result = await updateDocument('orders', id, updateData);
+
+        console.log('Update Result:', result);
+        console.log('==========================================');
+
+        if (result.success) {
+            res.json({ success: true, message: 'Order updated successfully' });
+        } else {
+            res.status(500).json({ success: false, error: result.error });
+        }
+    } catch (error) {
+        console.error('Error updating order:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Test route
 app.get('/', (req, res) => {
     res.json({ message: 'Backend server is running with Firebase!' });
 });
+
+// Health check endpoint for mobile testing
+app.get('/health', (req, res) => {
+    res.json({ status: 'Backend working 🚀' });
+});
+
+// ============================================
+// GENERIC DATA ROUTES
+// ============================================
 
 // Example Firebase Firestore route - Get all documents from a collection
 app.get('/api/data/:collection', async (req, res) => {
@@ -25,7 +66,14 @@ app.get('/api/data/:collection', async (req, res) => {
         const data = [];
 
         querySnapshot.forEach((doc) => {
-            data.push({ id: doc.id, ...doc.data() });
+            // Store Firestore document ID separately to avoid conflicts with product's numeric id
+            const docData = doc.data();
+            data.push({
+                ...docData,
+                docId: doc.id, // Firestore document ID for updates/deletes
+                // Keep the product's numeric id if it exists, otherwise use doc.id
+                id: docData.id !== undefined ? docData.id : doc.id
+            });
         });
 
         res.json({ success: true, data });
@@ -143,7 +191,7 @@ app.get('/api/auth/user/:uid', async (req, res) => {
 // PRODUCT MANAGEMENT ROUTES
 // ============================================
 
-import { updateDocument, getDocumentById } from './firebaseOperations.js';
+import { getDocumentById } from './firebaseOperations.js';
 import { uploadFile } from './firebaseOperations.js';
 import multer from 'multer';
 
@@ -156,10 +204,46 @@ app.put('/api/products/:id', async (req, res) => {
         const { id } = req.params;
         const updateData = req.body;
 
+        console.log('========== PRODUCT UPDATE REQUEST ==========');
+        console.log('Product ID:', id);
+        console.log('Update Data:', JSON.stringify(updateData, null, 2));
+
         const result = await updateDocument('products', id, updateData);
-        res.json(result);
+
+        console.log('Update Result:', result);
+        console.log('===========================================');
+
+        if (result.success) {
+            res.json({ success: true, message: 'Product updated successfully' });
+        } else {
+            res.status(500).json({ success: false, error: result.error });
+        }
     } catch (error) {
         console.error('Error updating product:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Delete product
+app.delete('/api/products/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        console.log('========== PRODUCT DELETE REQUEST ==========');
+        console.log('Product ID:', id);
+
+        const result = await deleteDocument('products', id);
+
+        console.log('Delete Result:', result);
+        console.log('===========================================');
+
+        if (result.success) {
+            res.json({ success: true, message: 'Product deleted successfully' });
+        } else {
+            res.status(500).json({ success: false, error: result.error });
+        }
+    } catch (error) {
+        console.error('Error deleting product:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -299,10 +383,19 @@ app.post('/api/reviews', async (req, res) => {
 
         const ordersSnapshot = await getDocs(ordersQuery);
         let hasPurchased = false;
+        const productIdStr = String(productId);
+        const productIdNum = parseInt(productId);
+
+        console.log('Checking purchase history for productId:', productId, 'userId:', userId);
 
         ordersSnapshot.forEach((doc) => {
             const orderData = doc.data();
-            if (orderData.items && orderData.items.some(item => item.id == productId || item.id === parseInt(productId))) {
+            console.log('Order items:', orderData.items?.map(i => ({ id: i.id, type: typeof i.id })));
+            if (orderData.items && orderData.items.some(item => {
+                const itemIdStr = String(item.id);
+                const itemIdNum = parseInt(item.id);
+                return itemIdStr === productIdStr || itemIdNum === productIdNum;
+            })) {
                 hasPurchased = true;
             }
         });
@@ -420,10 +513,22 @@ app.get('/api/reviews/can-review/:productId/:userId', async (req, res) => {
 
         const ordersSnapshot = await getDocs(ordersQuery);
         let hasPurchased = false;
+        const productIdStr = String(productId);
+        const productIdNum = parseInt(productId);
+
+        console.log('Checking review eligibility - productId:', productId, 'userId:', userId);
+        console.log('Found orders:', ordersSnapshot.size);
 
         ordersSnapshot.forEach((doc) => {
             const orderData = doc.data();
-            if (orderData.items && orderData.items.some(item => item.id == productId || item.id === parseInt(productId))) {
+            console.log('Checking order items:', orderData.items?.map(i => ({ id: i.id, type: typeof i.id })));
+            if (orderData.items && orderData.items.some(item => {
+                const itemIdStr = String(item.id);
+                const itemIdNum = parseInt(item.id);
+                const match = itemIdStr === productIdStr || itemIdNum === productIdNum;
+                console.log(`Comparing item.id ${item.id} (${typeof item.id}) with productId ${productId}: ${match}`);
+                return match;
+            })) {
                 hasPurchased = true;
             }
         });
