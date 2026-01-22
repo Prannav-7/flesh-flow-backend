@@ -107,7 +107,7 @@ app.post('/api/data/:collection', async (req, res) => {
 // AUTHENTICATION ROUTES
 // ============================================
 
-import { signUp, signIn, signOutUser, getUserData } from './authRoutes.js';
+import { signUp, signIn, signOutUser, getUserData, updateUserProfile, changeUserPassword } from './authRoutes.js';
 
 // Sign Up - Create new user
 app.post('/api/auth/signup', async (req, res) => {
@@ -183,6 +183,62 @@ app.get('/api/auth/user/:uid', async (req, res) => {
         }
     } catch (error) {
         console.error('Get user error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Update User Profile
+app.put('/api/auth/user/:uid', async (req, res) => {
+    try {
+        const { uid } = req.params;
+        const updates = req.body;
+
+        // Remove fields that shouldn't be updated
+        delete updates.uid;
+        delete updates.email;
+        delete updates.createdAt;
+
+        const result = await updateUserProfile(uid, updates);
+
+        if (result.success) {
+            res.json(result);
+        } else {
+            res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('Update profile error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Change Password
+app.post('/api/auth/change-password', async (req, res) => {
+    try {
+        const { email, currentPassword, newPassword } = req.body;
+
+        if (!email || !currentPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                error: 'Email, current password, and new password are required'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                error: 'New password must be at least 6 characters long'
+            });
+        }
+
+        const result = await changeUserPassword(email, currentPassword, newPassword);
+
+        if (result.success) {
+            res.json(result);
+        } else {
+            res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('Change password error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

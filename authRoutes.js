@@ -3,9 +3,10 @@ import {
     createUserWithEmailAndPassword,
     signInWithEmailAndPassword,
     signOut,
-    updateProfile
+    updateProfile,
+    updatePassword
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 
 /**
  * Sign Up - Create new user account
@@ -151,6 +152,78 @@ export async function getUserData(uid) {
         return {
             success: false,
             error: error.message
+        };
+    }
+}
+
+/**
+ * Update user profile (displayName, phone, etc.)
+ */
+export async function updateUserProfile(uid, updates) {
+    try {
+        const userDocRef = doc(db, 'users', uid);
+
+        // Update Firestore document
+        await updateDoc(userDocRef, {
+            ...updates,
+            updatedAt: serverTimestamp()
+        });
+
+        // Get updated user data
+        const userDoc = await getDoc(userDocRef);
+
+        return {
+            success: true,
+            message: 'Profile updated successfully',
+            user: userDoc.data()
+        };
+    } catch (error) {
+        console.error('Update profile error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Change user password
+ */
+export async function changeUserPassword(email, currentPassword, newPassword) {
+    try {
+        // First, sign in the user with current password to verify it
+        const userCredential = await signInWithEmailAndPassword(auth, email, currentPassword);
+        const user = userCredential.user;
+
+        // Update password
+        await updatePassword(user, newPassword);
+
+        // Sign out after changing password
+        await signOut(auth);
+
+        return {
+            success: true,
+            message: 'Password changed successfully'
+        };
+    } catch (error) {
+        console.error('Change password error:', error);
+
+        // Provide more user-friendly error messages
+        let errorMessage = error.message;
+        if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+            errorMessage = 'Current password is incorrect';
+        } else if (error.code === 'auth/weak-password') {
+            errorMessage = 'New password is too weak. Please use at least 6 characters';
+        } else if (error.code === 'auth/user-not-found') {
+            errorMessage = 'User not found';
+        } else if (error.code === 'auth/too-many-requests') {
+            errorMessage = 'Too many failed attempts. Please try again later';
+        }
+
+        return {
+            success: false,
+            error: errorMessage,
+            code: error.code
         };
     }
 }
