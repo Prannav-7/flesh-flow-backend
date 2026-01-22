@@ -251,7 +251,7 @@ app.delete('/api/products/:id', async (req, res) => {
 // Reduce stock after order
 app.post('/api/products/reduce-stock', async (req, res) => {
     try {
-        const { items } = req.body; // Array of {id, quantity}
+        const { items } = req.body; // Array of {id, quantity, size}
 
         const { getDocs, collection: firestoreCollection, query, where, updateDoc, doc: docFunc } = await import('firebase/firestore');
 
@@ -269,7 +269,80 @@ app.post('/api/products/reduce-stock', async (req, res) => {
                 const productDoc = querySnapshot.docs[0];
                 const productData = productDoc.data();
                 const currentStock = productData.available || 0;
-                const newStock = Math.max(0, currentStock - item.quantity);
+
+                // Get product unit - auto-detect if missing
+                let productUnit = productData.unit;
+                if (!productUnit) {
+                    const category = (productData.category || '').toLowerCase();
+                    productUnit = category.includes('oil') ? 'L' : 'kg';
+                }
+
+                // Calculate quantity to reduce based on item quantity and size
+                let quantityToReduce = item.quantity;
+
+                console.log(`Processing item: ${productData.name}, quantity: ${item.quantity}, size: ${item.size}, productUnit: ${productUnit}`);
+
+                // If the item has a size (like "500g", "1kg", "250ml", "1L"), parse it
+                if (item.size) {
+                    // Enhanced regex to match kg, gm, g, l, ml
+                    const sizeMatch = item.size.match(/^([\d.]+)\s*(kg|gm|g|l|ml)$/i);
+                    if (sizeMatch) {
+                        const sizeValue = parseFloat(sizeMatch[1]);
+                        const sizeUnit = sizeMatch[2].toLowerCase();
+                        const productUnitLower = productUnit.toLowerCase();
+
+                        console.log(`Parsed size: ${sizeValue}${sizeUnit}`);
+
+                        // Convert to product's base unit
+                        if (productUnitLower === 'kg') {
+                            // Product is in kg
+                            if (sizeUnit === 'gm' || sizeUnit === 'g') {
+                                // Convert grams to kg: 500g = 0.5kg
+                                quantityToReduce = item.quantity * (sizeValue / 1000);
+                                console.log(`Converted ${sizeValue}g to ${quantityToReduce}kg`);
+                            } else if (sizeUnit === 'kg') {
+                                // Already in kg
+                                quantityToReduce = item.quantity * sizeValue;
+                            }
+                        } else if (productUnitLower === 'gm' || productUnitLower === 'g') {
+                            // Product is in grams
+                            if (sizeUnit === 'kg') {
+                                // Convert kg to grams: 1kg = 1000g
+                                quantityToReduce = item.quantity * (sizeValue * 1000);
+                                console.log(`Converted ${sizeValue}kg to ${quantityToReduce}g`);
+                            } else if (sizeUnit === 'gm' || sizeUnit === 'g') {
+                                // Already in grams
+                                quantityToReduce = item.quantity * sizeValue;
+                            }
+                        } else if (productUnitLower === 'l') {
+                            // Product is in liters
+                            if (sizeUnit === 'ml') {
+                                // Convert ml to liters: 250ml = 0.25L
+                                quantityToReduce = item.quantity * (sizeValue / 1000);
+                                console.log(`Converted ${sizeValue}ml to ${quantityToReduce}L`);
+                            } else if (sizeUnit === 'l') {
+                                // Already in liters
+                                quantityToReduce = item.quantity * sizeValue;
+                            }
+                        } else if (productUnitLower === 'ml') {
+                            // Product is in milliliters (rare)
+                            if (sizeUnit === 'l') {
+                                // Convert liters to ml: 1L = 1000ml
+                                quantityToReduce = item.quantity * (sizeValue * 1000);
+                                console.log(`Converted ${sizeValue}L to ${quantityToReduce}ml`);
+                            } else if (sizeUnit === 'ml') {
+                                // Already in ml
+                                quantityToReduce = item.quantity * sizeValue;
+                            }
+                        }
+                    } else {
+                        console.log(`Size "${item.size}" did not match regex pattern`);
+                    }
+                } else {
+                    console.log('No size provided, using quantity as-is');
+                }
+
+                const newStock = Math.max(0, currentStock - quantityToReduce);
 
                 // Update using the Firestore document ID
                 const productRef = docFunc(db, 'products', productDoc.id);
@@ -279,7 +352,7 @@ app.post('/api/products/reduce-stock', async (req, res) => {
                     updatedAt: new Date().toISOString()
                 });
 
-                console.log(`Updated stock for product ID ${item.id}: ${currentStock} -> ${newStock}`);
+                console.log(`Updated stock for product ID ${item.id} (${productData.name}): ${currentStock}${productUnit} -> ${newStock}${productUnit} (reduced by ${quantityToReduce}${productUnit})`);
             } else {
                 console.warn(`Product with ID ${item.id} not found in Firestore`);
             }
