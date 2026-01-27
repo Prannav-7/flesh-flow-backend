@@ -665,20 +665,20 @@ app.get('/api/reviews/:productId', async (req, res) => {
     }
 });
 
-// Check if user can review a product
+// Check if user can review a product (must have delivered order)
 app.get('/api/reviews/can-review/:productId/:userId', async (req, res) => {
     try {
         const { productId, userId } = req.params;
         const { getDocs, collection: firestoreCollection, query, where } = await import('firebase/firestore');
 
-        // Check if user purchased the product
+        // Check if user purchased the product AND it was delivered
         const ordersQuery = query(
             firestoreCollection(db, 'orders'),
             where('userId', '==', userId)
         );
 
         const ordersSnapshot = await getDocs(ordersQuery);
-        let hasPurchased = false;
+        let hasPurchasedAndDelivered = false;
         const productIdStr = String(productId);
         const productIdNum = parseInt(productId);
 
@@ -687,20 +687,27 @@ app.get('/api/reviews/can-review/:productId/:userId', async (req, res) => {
 
         ordersSnapshot.forEach((doc) => {
             const orderData = doc.data();
-            console.log('Checking order items:', orderData.items?.map(i => ({ id: i.id, type: typeof i.id })));
-            if (orderData.items && orderData.items.some(item => {
+            console.log('Checking order status:', orderData.status);
+
+            // Check if order contains the product AND status is "Delivered"
+            if (orderData.status === 'Delivered' && orderData.items && orderData.items.some(item => {
                 const itemIdStr = String(item.id);
                 const itemIdNum = parseInt(item.id);
                 const match = itemIdStr === productIdStr || itemIdNum === productIdNum;
                 console.log(`Comparing item.id ${item.id} (${typeof item.id}) with productId ${productId}: ${match}`);
                 return match;
             })) {
-                hasPurchased = true;
+                hasPurchasedAndDelivered = true;
             }
         });
 
-        if (!hasPurchased) {
-            return res.json({ success: true, canReview: false, reason: 'not_purchased' });
+        if (!hasPurchasedAndDelivered) {
+            return res.json({
+                success: true,
+                canReview: false,
+                reason: 'not_delivered',
+                message: 'You can only review products from delivered orders'
+            });
         }
 
         // Check if user already reviewed
