@@ -682,24 +682,57 @@ app.get('/api/reviews/can-review/:productId/:userId', async (req, res) => {
         const productIdStr = String(productId);
         const productIdNum = parseInt(productId);
 
-        console.log('Checking review eligibility - productId:', productId, 'userId:', userId);
+        console.log('========================================');
+        console.log('REVIEW ELIGIBILITY CHECK');
+        console.log('Product ID:', productId, '(type:', typeof productId + ')');
+        console.log('User ID:', userId);
         console.log('Found orders:', ordersSnapshot.size);
+        console.log('========================================');
 
         ordersSnapshot.forEach((doc) => {
             const orderData = doc.data();
-            console.log('Checking order status:', orderData.status);
+            const orderStatus = (orderData.status || '').toLowerCase();
 
-            // Check if order contains the product AND status is "Delivered"
-            if (orderData.status === 'Delivered' && orderData.items && orderData.items.some(item => {
+            console.log('\n--- Checking Order:', doc.id, '---');
+            console.log('Order Status:', orderData.status, '→ normalized:', orderStatus);
+            console.log('Status Match:', orderStatus === 'delivered');
+            console.log('Has Items:', !!orderData.items);
+
+            if (orderData.items) {
+                console.log('Order Items:', orderData.items.length);
+                orderData.items.forEach((item, index) => {
+                    console.log(`  Item ${index + 1}:`, {
+                        id: item.id,
+                        type: typeof item.id,
+                        name: item.name
+                    });
+                });
+            }
+
+            // Check if order contains the product AND status is "Delivered" (case-insensitive)
+            if (orderStatus === 'delivered' && orderData.items && orderData.items.some(item => {
                 const itemIdStr = String(item.id);
                 const itemIdNum = parseInt(item.id);
                 const match = itemIdStr === productIdStr || itemIdNum === productIdNum;
-                console.log(`Comparing item.id ${item.id} (${typeof item.id}) with productId ${productId}: ${match}`);
+
+                if (match) {
+                    console.log('✓✓✓ MATCH FOUND! ✓✓✓');
+                    console.log('  Item ID:', item.id, '(', typeof item.id, ')');
+                    console.log('  Product ID:', productId, '(', typeof productId, ')');
+                }
+
                 return match;
             })) {
                 hasPurchasedAndDelivered = true;
+                console.log('✓ User CAN review this product!');
+            } else {
+                console.log('✗ User CANNOT review (status or product mismatch)');
             }
         });
+
+        console.log('\n========================================');
+        console.log('FINAL RESULT: canReview =', hasPurchasedAndDelivered);
+        console.log('========================================\n');
 
         if (!hasPurchasedAndDelivered) {
             return res.json({
