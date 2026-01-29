@@ -110,6 +110,60 @@ export async function signIn(email, password) {
 }
 
 /**
+ * Google Sign In - Setup/Sync user from Google Auth
+ */
+export async function googleSignIn(userData) {
+    try {
+        const { uid, email, displayName, photoURL } = userData;
+
+        // Check if user exists in Firestore
+        const userDocRef = doc(db, 'users', uid);
+        const userDoc = await getDoc(userDocRef);
+
+        let finalUserData;
+
+        if (userDoc.exists()) {
+            // Update last login
+            finalUserData = userDoc.data();
+            await updateDoc(userDocRef, {
+                lastLogin: serverTimestamp(),
+                photoURL: photoURL || finalUserData.photoURL || ''
+            });
+            finalUserData = { ...finalUserData, lastLogin: new Date().toISOString() };
+        } else {
+            // Create new user document
+            finalUserData = {
+                uid,
+                email,
+                displayName: displayName || '',
+                photoURL: photoURL || '',
+                role: 'user', // default role
+                createdAt: serverTimestamp(),
+                lastLogin: serverTimestamp(),
+                isActive: true
+            };
+            await setDoc(userDocRef, finalUserData);
+
+            // For return value, replace timestamp with string
+            finalUserData = { ...finalUserData, createdAt: new Date().toISOString(), lastLogin: new Date().toISOString() };
+        }
+
+        return {
+            success: true,
+            message: 'Google login successful',
+            user: finalUserData
+        };
+    } catch (error) {
+        console.error('Google sign in error:', error);
+        return {
+            success: false,
+            error: error.message,
+            code: error.code
+        };
+    }
+}
+
+/**
  * Sign Out - Logout user
  */
 export async function signOutUser() {

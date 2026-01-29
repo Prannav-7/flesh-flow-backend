@@ -144,7 +144,7 @@ app.post('/api/data/:collection', async (req, res) => {
 // AUTHENTICATION ROUTES
 // ============================================
 
-import { signUp, signIn, signOutUser, getUserData, updateUserProfile, changeUserPassword } from './authRoutes.js';
+import { signUp, signIn, googleSignIn, signOutUser, getUserData, updateUserProfile, changeUserPassword } from './authRoutes.js';
 
 // Sign Up - Create new user
 app.post('/api/auth/signup', async (req, res) => {
@@ -192,6 +192,31 @@ app.post('/api/auth/signin', async (req, res) => {
         }
     } catch (error) {
         console.error('Signin error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Google Sign In - Setup/Sync user
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const userData = req.body;
+
+        if (!userData || !userData.uid) {
+            return res.status(400).json({
+                success: false,
+                error: 'User data with UID is required'
+            });
+        }
+
+        const result = await googleSignIn(userData);
+
+        if (result.success) {
+            res.json(result);
+        } else {
+            res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('Google auth error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
