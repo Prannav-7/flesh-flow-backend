@@ -116,18 +116,43 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
         // 3. Restore stock for each item
         if (orderData.items && orderData.items.length > 0) {
             for (const item of orderData.items) {
-                // Query products by numeric id field
-                const productsQuery = query(
-                    firestoreCollection(db, 'products'),
-                    where('id', '==', parseInt(item.id))
-                );
+                console.log(`Restoring stock for product ID: ${item.id}`);
 
-                const querySnapshot = await getDocs(productsQuery);
+                let targetProductDoc = null;
 
-                if (!querySnapshot.empty) {
-                    const productDoc = querySnapshot.docs[0];
-                    const productData = productDoc.data();
-                    const currentStock = productData.available || 0;
+                // Try numeric ID
+                const numericId = parseInt(item.id);
+                if (!isNaN(numericId)) {
+                    const productsQuery = query(
+                        firestoreCollection(db, 'products'),
+                        where('id', '==', numericId)
+                    );
+                    const qSnapshot = await getDocs(productsQuery);
+                    if (!qSnapshot.empty) targetProductDoc = qSnapshot.docs[0];
+                }
+
+                // Try string ID
+                if (!targetProductDoc) {
+                    const stringQuery = query(
+                        firestoreCollection(db, 'products'),
+                        where('id', '==', String(item.id))
+                    );
+                    const sSnapshot = await getDocs(stringQuery);
+                    if (!sSnapshot.empty) targetProductDoc = sSnapshot.docs[0];
+                }
+
+                // Try direct doc ID
+                if (!targetProductDoc && String(item.id).length > 5) {
+                    try {
+                        const directRef = docFunc(db, 'products', String(item.id));
+                        const directSnap = await getDoc(directRef);
+                        if (directSnap.exists()) targetProductDoc = directSnap;
+                    } catch (e) { }
+                }
+
+                if (targetProductDoc) {
+                    const productData = targetProductDoc.data();
+                    const currentStock = Number(productData.available) || 0;
 
                     // Get product unit
                     let productUnit = productData.unit;
@@ -136,11 +161,11 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
                         productUnit = category.includes('oil') ? 'L' : 'kg';
                     }
 
-                    // Calculate quantity to restore (same logic as reduce-stock but adding)
-                    let quantityToRestore = item.quantity;
+                    // Calculate quantity to restore
+                    let quantityToRestore = Number(item.quantity) || 0;
 
                     if (item.size) {
-                        const sizeMatch = item.size.match(/^([\d.]+)\s*(kg|gm|g|l|ml)$/i);
+                        const sizeMatch = String(item.size).match(/^([\d.]+)\s*(kg|gm|g|l|ml)$/i);
                         if (sizeMatch) {
                             const sizeValue = parseFloat(sizeMatch[1]);
                             const sizeUnit = sizeMatch[2].toLowerCase();
@@ -163,7 +188,7 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
                     }
 
                     const newStock = currentStock + quantityToRestore;
-                    const productRef = docFunc(db, 'products', productDoc.id);
+                    const productRef = docFunc(db, 'products', targetProductDoc.id);
 
                     await updateDoc(productRef, {
                         available: newStock,
@@ -478,22 +503,56 @@ app.post('/api/products/reduce-stock', async (req, res) => {
     try {
         const { items } = req.body; // Array of {id, quantity, size}
 
-        const { getDocs, collection: firestoreCollection, query, where, updateDoc, doc: docFunc } = await import('firebase/firestore');
+        const { getDocs, collection: firestoreCollection, query, where, updateDoc, doc: docFunc, getDoc } = await import('firebase/firestore');
 
         for (const item of items) {
-            // Query products by the numeric id field, not the Firestore document ID
-            const productsQuery = query(
-                firestoreCollection(db, 'products'),
-                where('id', '==', parseInt(item.id))
-            );
+            console.log(`Processing stock reduction for product ID: ${item.id}`);
 
-            const querySnapshot = await getDocs(productsQuery);
+            let targetProductDoc = null;
 
-            if (!querySnapshot.empty) {
-                // Get the first matching product
-                const productDoc = querySnapshot.docs[0];
-                const productData = productDoc.data();
-                const currentStock = productData.available || 0;
+            // 1. Try Query by numeric ID field
+            const numericId = parseInt(item.id);
+            if (!isNaN(numericId)) {
+                const productsQuery = query(
+                    firestoreCollection(db, 'products'),
+                    where('id', '==', numericId)
+                );
+                const querySnapshot = await getDocs(productsQuery);
+                if (!querySnapshot.empty) {
+                    targetProductDoc = querySnapshot.docs[0];
+                }
+            }
+
+            // 2. Try Query by string ID field if not found or if numeric ID failed
+            if (!targetProductDoc) {
+                console.log(`Not found by numeric ID, trying string ID: ${item.id}`);
+                const stringQuery = query(
+                    firestoreCollection(db, 'products'),
+                    where('id', '==', String(item.id))
+                );
+                const stringSnapshot = await getDocs(stringQuery);
+                if (!stringSnapshot.empty) {
+                    targetProductDoc = stringSnapshot.docs[0];
+                }
+            }
+
+            // 3. Try direct document ID lookup if still not found
+            if (!targetProductDoc && String(item.id).length > 5) {
+                console.log(`Still not found, trying direct document ID lookup: ${item.id}`);
+                try {
+                    const directRef = docFunc(db, 'products', String(item.id));
+                    const directSnap = await getDoc(directRef);
+                    if (directSnap.exists()) {
+                        targetProductDoc = directSnap;
+                    }
+                } catch (e) {
+                    console.error('Error in direct doc lookup:', e);
+                }
+            }
+
+            if (targetProductDoc) {
+                const productData = targetProductDoc.data();
+                const currentStock = Number(productData.available) || 0;
 
                 // Get product unit - auto-detect if missing
                 let productUnit = productData.unit;
@@ -502,90 +561,51 @@ app.post('/api/products/reduce-stock', async (req, res) => {
                     productUnit = category.includes('oil') ? 'L' : 'kg';
                 }
 
-                // Calculate quantity to reduce based on item quantity and size
-                let quantityToReduce = item.quantity;
+                // Calculate quantity to reduce
+                let quantityToReduce = Number(item.quantity) || 0;
 
-                console.log(`Processing item: ${productData.name}, quantity: ${item.quantity}, size: ${item.size}, productUnit: ${productUnit}`);
-
-                // If the item has a size (like "500g", "1kg", "250ml", "1L"), parse it
+                // Handle size conversion
                 if (item.size) {
-                    // Enhanced regex to match kg, gm, g, l, ml
-                    const sizeMatch = item.size.match(/^([\d.]+)\s*(kg|gm|g|l|ml)$/i);
+                    const sizeMatch = String(item.size).match(/^([\d.]+)\s*(kg|gm|g|l|ml)$/i);
                     if (sizeMatch) {
                         const sizeValue = parseFloat(sizeMatch[1]);
                         const sizeUnit = sizeMatch[2].toLowerCase();
                         const productUnitLower = productUnit.toLowerCase();
 
-                        console.log(`Parsed size: ${sizeValue}${sizeUnit}`);
-
-                        // Convert to product's base unit
                         if (productUnitLower === 'kg') {
-                            // Product is in kg
-                            if (sizeUnit === 'gm' || sizeUnit === 'g') {
-                                // Convert grams to kg: 500g = 0.5kg
-                                quantityToReduce = item.quantity * (sizeValue / 1000);
-                                console.log(`Converted ${sizeValue}g to ${quantityToReduce}kg`);
-                            } else if (sizeUnit === 'kg') {
-                                // Already in kg
-                                quantityToReduce = item.quantity * sizeValue;
-                            }
+                            if (sizeUnit === 'gm' || sizeUnit === 'g') quantityToReduce = item.quantity * (sizeValue / 1000);
+                            else if (sizeUnit === 'kg') quantityToReduce = item.quantity * sizeValue;
                         } else if (productUnitLower === 'gm' || productUnitLower === 'g') {
-                            // Product is in grams
-                            if (sizeUnit === 'kg') {
-                                // Convert kg to grams: 1kg = 1000g
-                                quantityToReduce = item.quantity * (sizeValue * 1000);
-                                console.log(`Converted ${sizeValue}kg to ${quantityToReduce}g`);
-                            } else if (sizeUnit === 'gm' || sizeUnit === 'g') {
-                                // Already in grams
-                                quantityToReduce = item.quantity * sizeValue;
-                            }
+                            if (sizeUnit === 'kg') quantityToReduce = item.quantity * (sizeValue * 1000);
+                            else if (sizeUnit === 'gm' || sizeUnit === 'g') quantityToReduce = item.quantity * sizeValue;
                         } else if (productUnitLower === 'l') {
-                            // Product is in liters
-                            if (sizeUnit === 'ml') {
-                                // Convert ml to liters: 250ml = 0.25L
-                                quantityToReduce = item.quantity * (sizeValue / 1000);
-                                console.log(`Converted ${sizeValue}ml to ${quantityToReduce}L`);
-                            } else if (sizeUnit === 'l') {
-                                // Already in liters
-                                quantityToReduce = item.quantity * sizeValue;
-                            }
+                            if (sizeUnit === 'ml') quantityToReduce = item.quantity * (sizeValue / 1000);
+                            else if (sizeUnit === 'l') quantityToReduce = item.quantity * sizeValue;
                         } else if (productUnitLower === 'ml') {
-                            // Product is in milliliters (rare)
-                            if (sizeUnit === 'l') {
-                                // Convert liters to ml: 1L = 1000ml
-                                quantityToReduce = item.quantity * (sizeValue * 1000);
-                                console.log(`Converted ${sizeValue}L to ${quantityToReduce}ml`);
-                            } else if (sizeUnit === 'ml') {
-                                // Already in ml
-                                quantityToReduce = item.quantity * sizeValue;
-                            }
+                            if (sizeUnit === 'l') quantityToReduce = item.quantity * (sizeValue * 1000);
+                            else if (sizeUnit === 'ml') quantityToReduce = item.quantity * sizeValue;
                         }
-                    } else {
-                        console.log(`Size "${item.size}" did not match regex pattern`);
                     }
-                } else {
-                    console.log('No size provided, using quantity as-is');
                 }
 
                 const newStock = Math.max(0, currentStock - quantityToReduce);
+                const productRef = docFunc(db, 'products', targetProductDoc.id);
 
-                // Update using the Firestore document ID
-                const productRef = docFunc(db, 'products', productDoc.id);
                 await updateDoc(productRef, {
                     available: newStock,
                     inStock: newStock > 0,
                     updatedAt: new Date().toISOString()
                 });
 
-                console.log(`Updated stock for product ID ${item.id} (${productData.name}): ${currentStock}${productUnit} -> ${newStock}${productUnit} (reduced by ${quantityToReduce}${productUnit})`);
+                console.log(`✅ Success: Reduced ${productData.name} from ${currentStock} to ${newStock} (${productUnit})`);
             } else {
-                console.warn(`Product with ID ${item.id} not found in Firestore`);
+                console.warn(`❌ Failed: Product ID ${item.id} not found by any method`);
             }
         }
 
         res.json({ success: true, message: 'Stock updated successfully' });
     } catch (error) {
-        console.error('Error reducing stock:', error);
+        console.error('Critical Error in reduce-stock:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
